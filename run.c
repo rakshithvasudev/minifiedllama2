@@ -1,3 +1,14 @@
+/*
+
+Setting up llama2 on commodity systems with a decent performance.
+All inference only code setup. Simple C Inference. Repeat of
+Andrej's llama2.c Inference, picking up pieces from
+GGML. Manually typed to play around and
+see if there could be any performance gains that
+can be realized.
+
+*/
+
 #include <ctype.h>
 #include <fcntl.h>
 #include <math.h>
@@ -294,7 +305,7 @@ float *forward(Transformer *transformer, int token, int pos) {
 
   // forward all layers
   for (unsigned long long l = 0; l < p->n_layers; l++) {
-    
+
     // attention rmsnorm
     rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
 
@@ -320,6 +331,7 @@ float *forward(Transformer *transformer, int token, int pos) {
         vec[i + 1] = v0 * fci + v1 * fcr;
       }
     }
+
     // save key, value at this time step (pos) to our kv cache
     int loff = l * p->seq_len * kv_dim; // kv cache later offset for convenience
     float *key_cache_row = s->key_cache + loff + pos * kv_dim;
@@ -329,7 +341,7 @@ float *forward(Transformer *transformer, int token, int pos) {
 
     // multihead attn
     int h;
-    #pragma omp parallel for private(h)
+#pragma omp parallel for private(h)
     for (h = 0; h < p->n_heads; h++) {
       // get the query vector for this head
       float *q = s->q + h * head_size;
@@ -372,21 +384,117 @@ float *forward(Transformer *transformer, int token, int pos) {
     matmul(s->xb2, s->xb, w->wo + l * dim * dim, dim, dim);
 
     // residual connection back into x
-    for (int i =0; i < dim; i++){
-    x[i] += s->xb2[i];
-   } 
+    for (int i = 0; i < dim; i++) {
+      x[i] += s->xb2[i];
+    }
 
-    //ffn rms
+    // ffn rms
     rmsnorm(s->xb, x, w->rms_ffn_weight + l * dim, dim);
 
     // Now for FFN in Pytorch we have: self.w2(F.silu(self.w1(x))*self.w3(x))
     // first calculate self.w1(x) and self.w3(x)
     matmul(s->hb, s->xb, w->w1 + l * dim * hidden_dim, dim, hidden_dim);
     matmul(s->hb2, s->xb, w->w3 + l * dim * hidden_dim, dim, hidden_dim);
-    
-    // SwiGLU non linearity 
 
- 
+    // SwiGLU non linearity
+    for (int i = 0; i < hidden_dim; i++) {
+      float val = s->hb[i];
+      // silu(x) = x * sigma(x), where sigma(x) is logistic sigmoid
+      val *= (1.0f / (1.0f + expf(-val)));
+      // elementwise multiply with w3(x)
+      val *= s->hb2[i];
+      s->hb[i] = val;
+    }
+
+    // final matmul to get the output of the ffn
+    matmul(s->xb, s->hb, w->w2 + l * dim * hidden_dim, hidden_dim, dim);
+
+    // residual connection
+    for (int i = 0; i < dim; i++) {
+      x[i] += s->xb[i];
+    }
+  }
+
+  // final rmsnorm
+  rmsnorm(x, x, w->rms_final_weight, dim);
+
+  // classify into logits
+  matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+  return s->logits;
+}
+
+// ----------------------------------------------------------------------
+// BPE encoding tokenizer translation setup strings -> tokens and vice versa
+typedef struct {
+  char *str;
+  int id;
+} TokenIndex;
+
+typedef struct {
+  char **vocab;
+  float *vocab_scores;
+  TokenIndex *sorted_vocab;
+  int vocab_size;
+  unsigned int max_token_length;
+  unsigned char byte_pieces[512];
+} Tokenizer;
+
+int compare_tokens(const void *a, const void *b) {
+  return strcmp(((TokenIndex *)a)->str, ((TokenIndex *)b)->str);
+}
+
+void build_tokenizer(Tokenizer *t, char* tokenizer_path, int vocab_size) {
+
+  // should have written vocab_size into the tokenizer file
+  t->vocab_size = vocab_size;
+  // malloc space to hold the scores and the strings
+  t->vocab = (char**)malloc(vocab_size * sizeof(char *));
+  t->vocab_scores = (float *)malloc(vocab_size * sizeof(char *));
+  t->sorted_vocab = NULL; // lazy init
+  for (int i = 0; i < 256; i++) {
+    t->byte_pieces[i * 2] = (unsigned char)i;
+    t->byte_pieces[i * 2 + 1] = '\0';
+  }
+
+// read in the file
+FILE *file = fopen(tokenizer_path, "rb");
+if (!file) {
+  fprintf(stderr, "Couldn't load %s \n", tokenizer_path);
+  exit(EXIT_FAILURE);
+}
+if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) {
+  fprintf(stderr, "failed read\n");
+  exit(EXIT_FAILURE);
+}
+int len;
+for (int i = 0; i < vocab_size; i++) {
+  if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) {
+    fprintf(stderr, "failed read\n");
+    exit(EXIT_FAILURE);
+  }
+  if (fread(&len, sizeof(int), 1, file) != 1) {
+    fprintf(stderr, "failed read\n");
+    exit(EXIT_FAILURE);
+  }
+  t->vocab[i] = (char *)malloc(len + 1);
+  if (fread(t->vocab[i], len, 1, file) != 1) {
+    fprintf(stderr, "failed read\n");
+    exit(EXIT_FAILURE);
+  }
+  t->vocab[i][len] = '\0'; // add the string terminating token
+}
+fclose(file);
+}
 
 
-  int main() { return 0; }
+void free_tokenizer(Tokenizer *t) {
+  
+  for (int i = 0; i < t->vocab_size; i++) { free(t->vocab[i]);}
+  free(t->vocab);
+  free(t->vocab_scores);
+  free(t->sorted_vocab);
+}
+
+char* decode(Tokenizer* t, int prev_token, int token)
+
+int main() { return 0; }
