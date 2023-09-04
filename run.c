@@ -345,7 +345,7 @@ float *forward(Transformer *transformer, int token, int pos) {
     // save key, value at this time step (pos) to our kv cache
     int loff = l * p->seq_len * kv_dim; // kv cache later offset for convenience
     float *key_cache_row = s->key_cache + loff + pos * kv_dim;
-    float *value_cache_row = s->key_cache + loff + pos * kv_dim;
+    float *value_cache_row = s->value_cache + loff + pos * kv_dim;
     memcpy(key_cache_row, s->k, kv_dim * sizeof(*key_cache_row));
     memcpy(value_cache_row, s->v, kv_dim * sizeof(*value_cache_row));
 
