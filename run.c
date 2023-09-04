@@ -682,4 +682,48 @@ void encode(Tokenizer *t, char *text, int8_t bos, int8_t eos, int *tokens,
   free(str_buffer);
 }
 
+// ---------------------------------------------------------------------------------
+// Sampler which takes logits and returns a sampled token
+// sampling can be done in few ways: greedy argmax sampling, top-p sampling
+
+typedef struct {
+  float prob;
+  int index;
+} ProbIndex; // struct for sorting probabilities during top-p sampling
+
+typedef struct {
+  int vocab_size;
+  ProbIndex *probindex; // buffer used in top-p sampling
+  float temperature;
+  float topp;
+} Sampler;
+
+int sample_argmax(float *probabilities, int n) {
+
+  // return the index that has the highest probability
+  int max_i = 0;
+  float max_p = probabilities[0];
+  for (int i = 1; i < n; i++) {
+    if (probabilities[i] > max_p) {
+      max_i = i;
+      max_p = probabilities[i];
+    }
+  }
+
+  return max_i;
+}
+
+int sample_multi(float *probabilites, int n, float coin) {
+  // sample index from probabilities (they must sum to 1)
+  // coin is a random number in [0, 1), usually from random_f32()
+  float cdf = 0.0f;
+  for (int i = 0; i < n; i++) {
+    cdf += probabilites[i];
+    if (coin < cdf) {
+      return i;
+    }
+  }
+  return n - 1; // in case of rounding errors
+}
+
 int main() { return 0; }
