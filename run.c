@@ -839,4 +839,15 @@ int sample(Sampler *sampler, float *logits) {
   return next;
 }
 
+
+// ------------------------------------------------------------------------------------
+// utilities time
+
+long time_in_ms() {
+// return time in milliseconds, for benchmarking the model speed
+struct timespec time;
+clock_gettime(CLOCK_REALTIME, &time);
+return time.tv_sec * 1000 + time.tv_nsec/100000;
+}
+
 int main() { return 0; }
