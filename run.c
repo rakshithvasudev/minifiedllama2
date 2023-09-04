@@ -839,15 +839,86 @@ int sample(Sampler *sampler, float *logits) {
   return next;
 }
 
-
 // ------------------------------------------------------------------------------------
 // utilities time
 
 long time_in_ms() {
-// return time in milliseconds, for benchmarking the model speed
-struct timespec time;
-clock_gettime(CLOCK_REALTIME, &time);
-return time.tv_sec * 1000 + time.tv_nsec/100000;
+  // return time in milliseconds, for benchmarking the model speed
+  struct timespec time;
+  clock_gettime(CLOCK_REALTIME, &time);
+  return time.tv_sec * 1000 + time.tv_nsec / 100000;
+}
+
+// ------------------------------------------------------------------------------------
+// gen loop
+
+void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
+              char *prompt, int steps) {
+
+  char *empty_prompt = "";
+  if (prompt == NULL) {
+    prompt = empty_prompt;
+  }
+
+  // encode the string prompt into tokens sequence
+  int num_prompt_tokens = 0;
+
+  int *prompt_tokens = (int *)malloc((strlen(prompt) + 3) *
+                                     sizeof(int)); // +3 for '\0', ?BOS, ?EOS
+
+  encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+
+  if (num_prompt_tokens < 1) {
+    fprintf(stderr, "something is wrong, expected atleast one prompt token \n");
+    exit(EXIT_FAILURE);
+  }
+
+  // start the main loop
+  long start = 0; // used to init after first iteration
+  int next;
+  int token = prompt_tokens[0]; // kick off wiht first token in prompt
+  int pos = 0;                  // pos in the seq
+
+  while (pos < steps) {
+
+    // forward transformer to get logits for next token
+    float *logits = forward(transformer, token, pos);
+
+    // advance state machine
+    if (pos < num_prompt_tokens - 1) {
+      // if we're still processing the input prompt, force the next prompt token
+      next = prompt_tokens[pos + 1];
+    } else {
+      // otherwise sample the next token from logits
+      next = sample(sampler, logits);
+    }
+    pos++;
+
+    // data dependent terminating condition; BOS token delimits sequences
+    if (next == 1)
+      break;
+
+    // print the token as string, decode it with next tokenizer object
+    char *piece = decode(tokenizer, token, next);
+    safe_printf(piece); // same as printf("%s", piece), but skips unsafe bytes
+    fflush(stdout);
+    token = next;
+
+    // init the time here because the first iteration can be slower
+    if (start == 0) {
+      start = time_in_ms();
+    }
+  }
+  printf("\n");
+
+  // report tokens/sec (pos -1 because timer starts after first iteration)
+  if (pos > 1) {
+    long end = time_in_ms();
+    fprintf(stderr, "achieved tok/s: %f\n",
+            (pos - 1) / (double)(end - start) * 1000);
+  }
+
+  free(prompt_tokens);
 }
 
 int main() { return 0; }
