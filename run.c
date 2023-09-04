@@ -798,4 +798,45 @@ void build_sampler(Sampler *sampler, int vocab_size, float temperature,
 
 void free_sampler(Sampler *sampler) { free(sampler->probindex); }
 
+unsigned int random_u32(unsigned long long *state) {
+  // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
+  *state ^= *state >> 12;
+  *state ^= *state << 25;
+  *state ^= *state >> 27;
+  return (*state * 0x2545F4914F6CDD1Dull) >> 32;
+}
+
+float random_f32(unsigned long long *state) {
+  return (random_u32(state) >> 8) / 16777216.0f;
+}
+
+int sample(Sampler *sampler, float *logits) {
+
+  // sample the token given the logits and some hparams
+  int next;
+  if (sampler->temperature == 0.0f) {
+    // greedy argmax sampling: take the token with highest probs
+    next = sample_argmax(logits, sampler->vocab_size);
+  } else {
+    // apply the temperature to the logits
+    for (int q = 0; q < sampler->vocab_size; q++) {
+      logits[q] /= sampler->temperature;
+    }
+    // apply softmax to logits to get the probs for the next token
+    softmax(logits, sampler->vocab_size);
+    // flip a (float) coin (this is our source of entropy for sampling)
+    float coin = random_f32(&sampler->rng_state);
+    // we sample from this distribution to get the next token
+    if (sampler->topp <= 0 || sampler->topp >= 1) {
+      // simply sample from the predicted probability distribution
+      next = sample_multi(logits, sampler->vocab_size, coin);
+    } else {
+      // top -p (nucleus) sampling, clamping the least likely tokens to zero
+      next = sample_topp(logits, sampler->vocab_size, sampler->topp,
+                         sampler->probindex, coin);
+    }
+  }
+  return next;
+}
+
 int main() { return 0; }
