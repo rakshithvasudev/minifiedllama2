@@ -696,6 +696,7 @@ typedef struct {
   ProbIndex *probindex; // buffer used in top-p sampling
   float temperature;
   float topp;
+  unsigned long long rng_state;
 } Sampler;
 
 int sample_argmax(float *probabilities, int n) {
@@ -725,5 +726,76 @@ int sample_multi(float *probabilites, int n, float coin) {
   }
   return n - 1; // in case of rounding errors
 }
+
+int compare(const void *a, const void *b) {
+  ProbIndex *a_ = (ProbIndex *)a;
+  ProbIndex *b_ = (ProbIndex *)b;
+
+  if (a_->prob > b_->prob)
+    return -1;
+  if (a_->prob < b_->prob)
+    return 1;
+
+  return 0;
+}
+
+int sample_topp(float *probabilities, int n, float topp, ProbIndex *probindex,
+                float coin) {
+  // top p sampling (or nucleus sampling) samples from the smallest set of
+  // tokens that exceed probability topp. This way we never sample tokens that
+  // have very low probabilities are less likely to go "off the rails" coin is
+  // random number in [0,1) usually from random_f32()
+
+  int n0 = 0;
+  // quicksort indices in desc order of probabilities
+  // values smaller than (1-topp)/(n-1) cannot be a part of the result
+  // so for efficiency we crop these out as candidates before sorting
+  const float cutoff = (1.0f - topp) / (n - 1);
+  for (int i = 0; i < n; i++) {
+    if (probabilities[i] >= cutoff) {
+      probindex[n0].index = i;
+      probindex[n0].prob = probabilities[i];
+      n0++;
+    }
+  }
+
+  qsort(probindex, n0, sizeof(ProbIndex), compare);
+
+  // truncate the list where cumulative probability exceeds topp
+  float cumulative_prob = 0.0f;
+  int last_idx = n0 - 1; // incase of rounding errors consider all elements
+  for (int i = 0; i < n0; i++) {
+    cumulative_prob += probindex[i].prob;
+    if (cumulative_prob > topp) {
+      last_idx = i;
+      break; // we've exceeded topp by including last_idx
+    }
+  }
+
+  // sample from truncated list
+  float r = coin * cumulative_prob;
+  float cdf = 0.0f;
+  for (int i = 0; i <= last_idx; i++) {
+    cdf += probindex[i].prob;
+    if (r < cdf) {
+      return probindex[i].index;
+    }
+  }
+
+  return probindex[last_idx].index; // incase of rounding errors
+}
+
+void build_sampler(Sampler *sampler, int vocab_size, float temperature,
+                   float topp, unsigned long long rng_seed) {
+
+  sampler->vocab_size = vocab_size;
+  sampler->temperature = temperature;
+  sampler->topp = topp;
+  sampler->rng_state = rng_seed;
+  // buffer only used with nucleus sampling; may not need but its small
+  sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
+}
+
+void free_sampler(Sampler *sampler) { free(sampler->probindex); }
 
 int main() { return 0; }
